@@ -1,48 +1,43 @@
 package mr
 
-import "fmt"
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+)
 import "log"
 import "net/rpc"
 import "hash/fnv"
 
-
-//
 // Map functions return a slice of KeyValue.
-//
 type KeyValue struct {
 	Key   string
 	Value string
 }
 
-//
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
-//
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
-//
 // main/mrworker.go calls this function.
-//
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
 
 	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+	AskForTask(mapf, reducef)
+	//CallExample()
 
 }
 
-//
 // example function to show how to make an RPC call to the coordinator.
 //
 // the RPC argument and reply types are defined in rpc.go.
-//
 func CallExample() {
 
 	// declare an argument structure.
@@ -62,16 +57,59 @@ func CallExample() {
 	if ok {
 		// reply.Y should be 100.
 		fmt.Printf("reply.Y %v\n", reply.Y)
+		fmt.Printf("reply.taskType is: %v\n", reply.TaskType)
 	} else {
 		fmt.Printf("call failed!\n")
 	}
 }
 
-//
+func AskForTask(mapf func(string, string) []KeyValue,
+	reducef func(string, []string) string) {
+	taskRequest := TaskRequest{}
+	taskResponse := TaskResponse{}
+
+	ok := call("Coordinator.TaskRequest", &taskRequest, &taskResponse)
+	if ok {
+		fmt.Printf("Task Type: %v\n", taskResponse.TaskType)
+
+		doMap(mapf, taskResponse)
+
+	} else {
+		fmt.Printf("call failed!\n")
+	}
+}
+
+func doMap(mapf func(string, string) []KeyValue, taskResponse TaskResponse) {
+	filename := taskResponse.FilePath
+	fmt.Printf("Starting Map process on file %v\n", filename)
+
+	content := readFileContent(filename)
+
+	kva := mapf(filename, string(content))
+
+	fmt.Printf("Finished Map step for file: %v with %d output files\n", filename, len(kva))
+
+	for key, value := range kva {
+		fmt.Printf("Key: %v Value: %v\n", key, value)
+	}
+}
+
+func readFileContent(filename string) []byte {
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
+	file.Close()
+	return content
+}
+
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.
 // returns false if something goes wrong.
-//
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := coordinatorSock()
