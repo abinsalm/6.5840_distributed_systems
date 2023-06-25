@@ -83,15 +83,30 @@ func doMap(mapf func(string, string) []KeyValue, taskResponse TaskResponse) {
 	filename := taskResponse.FilePath
 	fmt.Printf("Starting Map process on file %v\n", filename)
 
+	// calculate reduce job ID
+	reduceId := ihash(filename) % taskResponse.NReduce
+
 	content := readFileContent(filename)
-
 	kva := mapf(filename, string(content))
-
 	fmt.Printf("Finished Map step for file: %v with %d output files\n", filename, len(kva))
 
-	for key, value := range kva {
-		fmt.Printf("Key: %v Value: %v\n", key, value)
+	// Now write map output to disk
+	// Write output to a temp file first so that nobody observes partially written files in the presence of crashes
+	tempFile, err := os.CreateTemp("", "sample")
+	check(err)
+	defer os.Remove(tempFile.Name())
+	fmt.Printf("Created temp file %v\n", tempFile.Name())
+
+	// write content to temp file
+	for _, kv := range kva {
+		fmt.Fprintf(tempFile, "%v %v\n", kv.Key, kv.Value)
 	}
+	fmt.Printf("Finished writing to temp file %v\n", tempFile.Name())
+
+	// after all write is finished, move temp file to actual file
+	outputFilePath := fmt.Sprint("mr-", taskResponse.MapId, "-", reduceId)
+	os.Rename(tempFile.Name(), outputFilePath)
+	fmt.Printf("Finished renaming temp file to  %v\n", outputFilePath)
 }
 
 func readFileContent(filename string) []byte {
@@ -126,4 +141,10 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
+}
+
+func check(e error) {
+	if e != nil {
+		panic(e)
+	}
 }

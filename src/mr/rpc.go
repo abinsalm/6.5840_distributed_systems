@@ -38,6 +38,7 @@ type TaskResponse struct {
 	TaskType TaskType
 	FilePath string
 	MapId    int
+	NReduce  int
 }
 
 // Cook up a unique-ish UNIX-domain socket name

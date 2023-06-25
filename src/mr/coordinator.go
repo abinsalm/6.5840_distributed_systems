@@ -12,6 +12,7 @@ type Coordinator struct {
 	// Your definitions here.
 	InputFiles []string
 	MapIndex   int
+	NReduce    int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -19,6 +20,7 @@ func (c *Coordinator) TaskRequest(taskRequest *TaskRequest, taskResponse *TaskRe
 	taskResponse.TaskType = MapTaskType
 	taskResponse.FilePath = c.InputFiles[c.MapIndex]
 	taskResponse.MapId = c.MapIndex
+	taskResponse.NReduce = c.NReduce
 
 	c.MapIndex += 1
 	return nil
@@ -69,6 +71,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// device N/nReduce => total number of files
 	c.InputFiles = files
 	c.MapIndex = 0
+	c.NReduce = nReduce
 
 	c.server()
 	return &c
