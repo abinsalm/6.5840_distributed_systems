@@ -2,6 +2,7 @@ package mr
 
 import (
 	"log"
+	"time"
 )
 import "net"
 import "os"
@@ -10,19 +11,46 @@ import "net/http"
 
 type Coordinator struct {
 	// Your definitions here.
-	InputFiles []string
-	MapIndex   int
-	NReduce    int
+	InputFiles                []string
+	MapIndex                  int
+	NReduce                   int
+	Tasks                     map[string]*WorkerTask
+	CompletedMapTasksCount    int
+	CompletedReduceTasksCount int
 }
 
 // Your code here -- RPC handlers for the worker to call.
 func (c *Coordinator) TaskRequest(taskRequest *TaskRequest, taskResponse *TaskResponse) error {
+	if c.MapIndex == len(c.InputFiles) {
+		taskResponse.TaskType = DoneTaskType
+		return nil
+	}
+
 	taskResponse.TaskType = MapTaskType
-	taskResponse.FilePath = c.InputFiles[c.MapIndex]
+	filePath := c.InputFiles[c.MapIndex]
+	taskResponse.FilePath = filePath
 	taskResponse.MapId = c.MapIndex
 	taskResponse.NReduce = c.NReduce
 
+	mapId := c.MapIndex
+	c.Tasks[filePath] = &WorkerTask{
+		TaskStatus: InProgressTask,
+		MapTaskId:  mapId,
+		StartTime:  time.Now(),
+	}
+
 	c.MapIndex += 1
+	return nil
+}
+
+func (c *Coordinator) MapTaskCompleted(mapTaskCompletedRequest *MapTaskCompletedRequest, mapTaskCompletedResponse *MapTaskCompletedResponse) error {
+	inputFilePath := mapTaskCompletedRequest.InputFilePath
+	outputFilePath := mapTaskCompletedRequest.OutputFilePath
+
+	c.Tasks[inputFilePath].TaskStatus = CompletedTask
+	c.Tasks[inputFilePath].MapOutputFilePath = outputFilePath
+	c.CompletedMapTasksCount += 1
+
 	return nil
 }
 
@@ -52,11 +80,7 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := false
-
-	// Your code here.
-
-	return ret
+	return c.CompletedReduceTasksCount == c.NReduce
 }
 
 // create a Coordinator.
@@ -66,6 +90,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	// Your code here.
+	c.Tasks = make(map[string]*WorkerTask)
 
 	// we have N files and need to split them into nReduce buckets
 	// device N/nReduce => total number of files

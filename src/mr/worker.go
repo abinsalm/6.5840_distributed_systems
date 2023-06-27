@@ -1,9 +1,11 @@
 package mr
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 )
 import "log"
 import "net/rpc"
@@ -29,84 +31,85 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Your worker implementation here.
 
-	// uncomment to send the Example RPC to the coordinator.
-	AskForTask(mapf, reducef)
-	//CallExample()
+	for {
+		taskResponse, err := AskForTask(mapf, reducef)
+		check(err)
 
-}
+		if taskResponse.TaskType == DoneTaskType {
+			log.Println("Job is done")
+			break
+		} else if taskResponse.TaskType == MapTaskType {
+			log.Println("Starting Map task")
+			outputFilePath := doMap(mapf, taskResponse)
 
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func CallExample() {
+			mapTaskCompletedRequest := MapTaskCompletedRequest{
+				InputFilePath:  taskResponse.FilePath,
+				OutputFilePath: outputFilePath,
+			}
+			mapTaskCompletedResponse := MapTaskCompletedResponse{}
 
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-		fmt.Printf("reply.taskType is: %v\n", reply.TaskType)
-	} else {
-		fmt.Printf("call failed!\n")
+			log.Println("Sending Coordinator.MapTaskCompleted")
+			ok := call("Coordinator.MapTaskCompleted", &mapTaskCompletedRequest, &mapTaskCompletedResponse)
+			if ok {
+				log.Println("Received successful response for Coordinator.MapTaskCompleted")
+			} else {
+				log.Println("Received error response for Coordinator.MapTaskCompleted!")
+			}
+		} else if taskResponse.TaskType == ReduceTaskType {
+			log.Fatal("Reduce Task is not supported")
+		}
 	}
+
 }
 
-func AskForTask(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
+func AskForTask(mapf func(string, string) []KeyValue, reducef func(string, []string) string) (TaskResponse, error) {
 	taskRequest := TaskRequest{}
 	taskResponse := TaskResponse{}
 
 	ok := call("Coordinator.TaskRequest", &taskRequest, &taskResponse)
 	if ok {
-		fmt.Printf("Task Type: %v\n", taskResponse.TaskType)
+		log.Printf("Task Type: %v\n", taskResponse.TaskType)
 
-		doMap(mapf, taskResponse)
+		return taskResponse, nil
 
 	} else {
-		fmt.Printf("call failed!\n")
+		log.Printf("call failed!\n")
+		return TaskResponse{}, errors.New("Call failed")
 	}
 }
 
-func doMap(mapf func(string, string) []KeyValue, taskResponse TaskResponse) {
+func doMap(mapf func(string, string) []KeyValue, taskResponse TaskResponse) string {
 	filename := taskResponse.FilePath
-	fmt.Printf("Starting Map process on file %v\n", filename)
+	log.Printf("Starting Map process on file %v\n", filename)
 
 	// calculate reduce job ID
 	reduceId := ihash(filename) % taskResponse.NReduce
 
 	content := readFileContent(filename)
 	kva := mapf(filename, string(content))
-	fmt.Printf("Finished Map step for file: %v with %d output files\n", filename, len(kva))
+	log.Printf("Finished Map step for file: %v with %d output files\n", filename, len(kva))
 
 	// Now write map output to disk
 	// Write output to a temp file first so that nobody observes partially written files in the presence of crashes
 	tempFile, err := os.CreateTemp("", "sample")
 	check(err)
-	defer os.Remove(tempFile.Name())
-	fmt.Printf("Created temp file %v\n", tempFile.Name())
+	log.Printf("Created temp file %v\n", tempFile.Name())
 
 	// write content to temp file
 	for _, kv := range kva {
-		fmt.Fprintf(tempFile, "%v %v\n", kv.Key, kv.Value)
+		_, err := fmt.Fprintf(tempFile, "%v %v\n", kv.Key, kv.Value)
+		check(err)
 	}
-	fmt.Printf("Finished writing to temp file %v\n", tempFile.Name())
+	log.Printf("Finished writing to temp file %v\n", tempFile.Name())
 
 	// after all write is finished, move temp file to actual file
-	outputFilePath := fmt.Sprint("mr-", taskResponse.MapId, "-", reduceId)
-	os.Rename(tempFile.Name(), outputFilePath)
-	fmt.Printf("Finished renaming temp file to  %v\n", outputFilePath)
+	err = os.MkdirAll("map_files", os.ModePerm)
+	outputFilePath := filepath.Join("map_files", fmt.Sprint("mr-", taskResponse.MapId, "-", reduceId))
+	err = os.Rename(tempFile.Name(), outputFilePath)
+	check(err)
+	log.Printf("Finished renaming temp file to  %v\n", outputFilePath)
+
+	return outputFilePath
 }
 
 func readFileContent(filename string) []byte {
@@ -139,7 +142,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		return true
 	}
 
-	fmt.Println(err)
+	log.Println(err)
 	return false
 }
 

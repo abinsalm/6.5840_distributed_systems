@@ -6,7 +6,10 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
+import (
+	"os"
+	"time"
+)
 import "strconv"
 
 //
@@ -29,7 +32,23 @@ type TaskType int64
 const (
 	MapTaskType TaskType = iota
 	ReduceTaskType
+	DoneTaskType
 )
+
+type TaskStatus int
+
+const (
+	InProgressTask TaskStatus = iota
+	CompletedTask
+	FailedTask
+)
+
+type WorkerTask struct {
+	TaskStatus        TaskStatus
+	MapTaskId         int
+	StartTime         time.Time
+	MapOutputFilePath string
+}
 
 type TaskRequest struct {
 }
@@ -39,6 +58,14 @@ type TaskResponse struct {
 	FilePath string
 	MapId    int
 	NReduce  int
+}
+
+type MapTaskCompletedRequest struct {
+	InputFilePath  string
+	OutputFilePath string
+}
+
+type MapTaskCompletedResponse struct {
 }
 
 // Cook up a unique-ish UNIX-domain socket name
