@@ -14,52 +14,112 @@ type Coordinator struct {
 	InputFiles                []string
 	MapIndex                  int
 	NReduce                   int
-	Tasks                     map[string]*WorkerTask
+	MapTasks                  map[string]*MapWorkerTask
+	ReduceTasks               map[int]*ReduceWorkerTask
+	ReduceTasksQueue          []int
 	CompletedMapTasksCount    int
 	CompletedReduceTasksCount int
+	ReduceServed              int
+	IsDone                    bool
 }
 
 // Your code here -- RPC handlers for the worker to call.
 func (c *Coordinator) TaskRequest(taskRequest *TaskRequest, taskResponse *TaskResponse) error {
-	if c.MapIndex == len(c.InputFiles) {
+	if c.Done() {
 		taskResponse.TaskType = DoneTaskType
 		return nil
 	}
 
+	if c.MapIndex == len(c.InputFiles) {
+		serveReduce(taskResponse, c)
+	} else {
+		serveMap(taskResponse, c)
+	}
+
+	return nil
+}
+
+func serveReduce(taskResponse *TaskResponse, c *Coordinator) {
+	log.Printf("Starting to serve reduce task\n")
+	queueLength := len(c.ReduceTasksQueue)
+	log.Printf("Queue length%d\n", queueLength)
+
+	reduceTaskId := c.ReduceTasksQueue[queueLength-1]
+	log.Printf("Task ID %v: Starting to serve reduce task\n", reduceTaskId)
+
+	c.ReduceTasksQueue = c.ReduceTasksQueue[:queueLength-1]
+	reduceTask := c.ReduceTasks[reduceTaskId]
+
+	taskResponse.TaskType = ReduceTaskType
+	taskResponse.FilePaths = reduceTask.InputFiles
+	taskResponse.TaskId = reduceTaskId
+
+	reduceTask.TaskStatus = InProgressTask
+	reduceTask.StartTime = time.Now()
+
+	c.ReduceServed += 1
+	log.Printf("Task ID %v: Finished serving reduce task\n", reduceTaskId)
+}
+
+func serveMap(taskResponse *TaskResponse, c *Coordinator) {
 	taskResponse.TaskType = MapTaskType
+
 	filePath := c.InputFiles[c.MapIndex]
-	taskResponse.FilePath = filePath
-	taskResponse.MapId = c.MapIndex
+	taskResponse.FilePaths = []string{filePath}
+
+	taskResponse.TaskId = c.MapIndex
 	taskResponse.NReduce = c.NReduce
 
 	mapId := c.MapIndex
-	c.Tasks[filePath] = &WorkerTask{
+	c.MapTasks[filePath] = &MapWorkerTask{
 		TaskStatus: InProgressTask,
-		MapTaskId:  mapId,
+		TaskId:     mapId,
 		StartTime:  time.Now(),
 	}
+	log.Printf("Serving map task %v with file %v\n", mapId, taskResponse.FilePaths[0])
 
 	c.MapIndex += 1
-	return nil
 }
 
 func (c *Coordinator) MapTaskCompleted(mapTaskCompletedRequest *MapTaskCompletedRequest, mapTaskCompletedResponse *MapTaskCompletedResponse) error {
 	inputFilePath := mapTaskCompletedRequest.InputFilePath
-	outputFilePath := mapTaskCompletedRequest.OutputFilePath
+	reduceTaskInput := mapTaskCompletedRequest.ReduceTaskInput
 
-	c.Tasks[inputFilePath].TaskStatus = CompletedTask
-	c.Tasks[inputFilePath].MapOutputFilePath = outputFilePath
+	c.MapTasks[inputFilePath].TaskStatus = CompletedTask
+	// we need to update this variable to quickly know whether the map phase is completed or not
 	c.CompletedMapTasksCount += 1
+
+	for reduceTaskId, outputFilePaths := range reduceTaskInput {
+		// initialize struct first time if it doesn't exist
+		if c.ReduceTasks[reduceTaskId] == nil {
+			c.ReduceTasks[reduceTaskId] = &ReduceWorkerTask{
+				TaskStatus: NotStarted,
+				InputFiles: outputFilePaths,
+			}
+
+			// pushing a new reduce task to the queue to be worked on later by a reduce worker
+			c.ReduceTasksQueue = append(c.ReduceTasksQueue, reduceTaskId)
+		} else {
+			c.ReduceTasks[reduceTaskId].InputFiles = append(c.ReduceTasks[reduceTaskId].InputFiles, outputFilePaths...)
+		}
+
+		inputFiles := c.ReduceTasks[reduceTaskId].InputFiles
+		log.Printf("Added file path %v to reduce task %v input files\n", inputFiles[len(inputFiles)-1], reduceTaskId)
+	}
 
 	return nil
 }
 
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 2
-	reply.TaskType = 2
+func (c *Coordinator) ReduceTaskCompleted(reduceTaskCompletedRequest *ReduceTaskCompletedRequest, reduceTaskCompletedResponse *ReduceTaskCompletedResponse) error {
+	reduceTaskId := reduceTaskCompletedRequest.ReduceTaskId
+	c.ReduceTasks[reduceTaskId].TaskStatus = CompletedTask
+	// we need to update this variable to quickly know whether the reduce phase is completed or not
+	c.CompletedReduceTasksCount += 1
+
+	if c.CompletedReduceTasksCount == len(c.ReduceTasks) {
+		c.IsDone = true
+	}
+
 	return nil
 }
 
@@ -80,7 +140,7 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	return c.CompletedReduceTasksCount == c.NReduce
+	return c.IsDone
 }
 
 // create a Coordinator.
@@ -90,7 +150,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	// Your code here.
-	c.Tasks = make(map[string]*WorkerTask)
+	c.MapTasks = make(map[string]*MapWorkerTask)
+	c.ReduceTasks = make(map[int]*ReduceWorkerTask)
+	c.ReduceTasksQueue = make([]int, 0)
 
 	// we have N files and need to split them into nReduce buckets
 	// device N/nReduce => total number of files

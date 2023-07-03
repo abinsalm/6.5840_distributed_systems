@@ -38,34 +38,47 @@ const (
 type TaskStatus int
 
 const (
+	NotStarted     TaskStatus = iota
 	InProgressTask TaskStatus = iota
 	CompletedTask
 	FailedTask
 )
 
-type WorkerTask struct {
-	TaskStatus        TaskStatus
-	MapTaskId         int
-	StartTime         time.Time
-	MapOutputFilePath string
+type MapWorkerTask struct {
+	TaskStatus TaskStatus
+	TaskId     int
+	StartTime  time.Time
+}
+
+type ReduceWorkerTask struct {
+	TaskStatus TaskStatus
+	StartTime  time.Time
+	InputFiles []string
 }
 
 type TaskRequest struct {
 }
 
 type TaskResponse struct {
-	TaskType TaskType
-	FilePath string
-	MapId    int
-	NReduce  int
+	TaskType  TaskType
+	FilePaths []string
+	TaskId    int
+	NReduce   int
 }
 
 type MapTaskCompletedRequest struct {
-	InputFilePath  string
-	OutputFilePath string
+	InputFilePath   string
+	ReduceTaskInput map[int][]string
 }
 
 type MapTaskCompletedResponse struct {
+}
+
+type ReduceTaskCompletedRequest struct {
+	ReduceTaskId int
+}
+
+type ReduceTaskCompletedResponse struct {
 }
 
 // Cook up a unique-ish UNIX-domain socket name
