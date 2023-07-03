@@ -2,3 +2,6 @@ pkg/
 api.key
 .api.key.trimmed
 *-handin.tar.gz
+/src/main/reduce_files/
+/src/main/map_files/
+/src/main/mr-tmp/
