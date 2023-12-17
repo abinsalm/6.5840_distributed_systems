@@ -11,16 +11,17 @@ import "net/http"
 
 type Coordinator struct {
 	// Your definitions here.
-	InputFiles                []string
-	MapIndex                  int
-	NReduce                   int
-	MapTasks                  map[string]*MapWorkerTask
-	ReduceTasks               map[int]*ReduceWorkerTask
-	ReduceTasksQueue          []int
-	CompletedMapTasksCount    int
-	CompletedReduceTasksCount int
-	ReduceServed              int
-	IsDone                    bool
+	InputFiles                 []string
+	NReduce                    int
+	MapTasksQueue              map[string]*MapWorkerTask
+	AvailableMapTasksQueue     []string
+	InProgressMapTasks         map[string]struct{}
+	CompletedMapTasks          map[string]struct{}
+	ReduceTasks                map[int]*ReduceWorkerTask
+	AvailableReduceTasksQueue  []int
+	InProgressReduceTasksQueue map[int]struct{}
+	CompletedReduceTasksCount  int
+	IsDone                     bool
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -30,7 +31,7 @@ func (c *Coordinator) TaskRequest(taskRequest *TaskRequest, taskResponse *TaskRe
 		return nil
 	}
 
-	if c.MapIndex == len(c.InputFiles) {
+	if len(c.CompletedMapTasks) == len(c.InputFiles) {
 		serveReduce(taskResponse, c)
 	} else {
 		serveMap(taskResponse, c)
@@ -41,13 +42,13 @@ func (c *Coordinator) TaskRequest(taskRequest *TaskRequest, taskResponse *TaskRe
 
 func serveReduce(taskResponse *TaskResponse, c *Coordinator) {
 	log.Printf("Starting to serve reduce task\n")
-	queueLength := len(c.ReduceTasksQueue)
+	queueLength := len(c.AvailableReduceTasksQueue)
 	log.Printf("Queue length%d\n", queueLength)
 
-	reduceTaskId := c.ReduceTasksQueue[queueLength-1]
+	reduceTaskId := c.AvailableReduceTasksQueue[queueLength-1]
 	log.Printf("Task ID %v: Starting to serve reduce task\n", reduceTaskId)
 
-	c.ReduceTasksQueue = c.ReduceTasksQueue[:queueLength-1]
+	c.AvailableReduceTasksQueue = c.AvailableReduceTasksQueue[:queueLength-1]
 	reduceTask := c.ReduceTasks[reduceTaskId]
 
 	taskResponse.TaskType = ReduceTaskType
@@ -57,37 +58,31 @@ func serveReduce(taskResponse *TaskResponse, c *Coordinator) {
 	reduceTask.TaskStatus = InProgressTask
 	reduceTask.StartTime = time.Now()
 
-	c.ReduceServed += 1
 	log.Printf("Task ID %v: Finished serving reduce task\n", reduceTaskId)
 }
 
 func serveMap(taskResponse *TaskResponse, c *Coordinator) {
+	// popping a task from available task queue
+	filePath := c.AvailableMapTasksQueue[0]
+	c.AvailableMapTasksQueue = c.AvailableMapTasksQueue[1:]
+
+	// add task to in progress task queue
+	mapTask := c.MapTasksQueue[filePath]
+	c.InProgressMapTasks[mapTask.FileName] = struct{}{}
+
 	taskResponse.TaskType = MapTaskType
-
-	filePath := c.InputFiles[c.MapIndex]
 	taskResponse.FilePaths = []string{filePath}
-
-	taskResponse.TaskId = c.MapIndex
+	taskResponse.TaskId = mapTask.TaskId
 	taskResponse.NReduce = c.NReduce
 
-	mapId := c.MapIndex
-	c.MapTasks[filePath] = &MapWorkerTask{
-		TaskStatus: InProgressTask,
-		TaskId:     mapId,
-		StartTime:  time.Now(),
-	}
-	log.Printf("Serving map task %v with file %v\n", mapId, taskResponse.FilePaths[0])
-
-	c.MapIndex += 1
+	log.Printf("Serving map task %v with file %v\n", mapTask.TaskId, taskResponse.FilePaths[0])
 }
 
 func (c *Coordinator) MapTaskCompleted(mapTaskCompletedRequest *MapTaskCompletedRequest, mapTaskCompletedResponse *MapTaskCompletedResponse) error {
 	inputFilePath := mapTaskCompletedRequest.InputFilePath
 	reduceTaskInput := mapTaskCompletedRequest.ReduceTaskInput
 
-	c.MapTasks[inputFilePath].TaskStatus = CompletedTask
-	// we need to update this variable to quickly know whether the map phase is completed or not
-	c.CompletedMapTasksCount += 1
+	c.CompletedMapTasks[inputFilePath] = struct{}{}
 
 	for reduceTaskId, outputFilePaths := range reduceTaskInput {
 		// initialize struct first time if it doesn't exist
@@ -98,7 +93,7 @@ func (c *Coordinator) MapTaskCompleted(mapTaskCompletedRequest *MapTaskCompleted
 			}
 
 			// pushing a new reduce task to the queue to be worked on later by a reduce worker
-			c.ReduceTasksQueue = append(c.ReduceTasksQueue, reduceTaskId)
+			c.AvailableReduceTasksQueue = append(c.AvailableReduceTasksQueue, reduceTaskId)
 		} else {
 			c.ReduceTasks[reduceTaskId].InputFiles = append(c.ReduceTasks[reduceTaskId].InputFiles, outputFilePaths...)
 		}
@@ -150,15 +145,28 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	// Your code here.
-	c.MapTasks = make(map[string]*MapWorkerTask)
-	c.ReduceTasks = make(map[int]*ReduceWorkerTask)
-	c.ReduceTasksQueue = make([]int, 0)
-
 	// we have N files and need to split them into nReduce buckets
 	// device N/nReduce => total number of files
 	c.InputFiles = files
-	c.MapIndex = 0
 	c.NReduce = nReduce
+
+	c.MapTasksQueue = make(map[string]*MapWorkerTask)
+	c.AvailableMapTasksQueue = make([]string, 0)
+	for fileIndex := 0; fileIndex < len(c.InputFiles); fileIndex += 1 {
+		filepath := c.InputFiles[fileIndex]
+		c.MapTasksQueue[filepath] = &MapWorkerTask{
+			TaskId:   fileIndex,
+			FileName: filepath,
+		}
+
+		c.AvailableMapTasksQueue = append(c.AvailableMapTasksQueue, filepath)
+	}
+	c.InProgressMapTasks = make(map[string]struct{})
+	c.CompletedMapTasks = make(map[string]struct{})
+
+	c.ReduceTasks = make(map[int]*ReduceWorkerTask)
+	c.AvailableReduceTasksQueue = make([]int, 0)
+	c.InProgressReduceTasksQueue = make(map[int]struct{})
 
 	c.server()
 	return &c

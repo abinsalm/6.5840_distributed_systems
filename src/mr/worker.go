@@ -48,8 +48,10 @@ func Worker(mapf func(string, string) []KeyValue,
 
 		if taskResponse.TaskType == DoneTaskType {
 			log.Println("Job is done")
-			break
-		} else if taskResponse.TaskType == MapTaskType {
+			return
+		}
+
+		if taskResponse.TaskType == MapTaskType {
 			log.Println("Starting Map task")
 			reduceTaskInput := doMap(mapf, taskResponse)
 
